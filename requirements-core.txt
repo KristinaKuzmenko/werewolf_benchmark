@@ -1,0 +1,22 @@
+# Core runtime dependencies for Docker images
+# This file contains only essential packages needed to run agents
+
+# Core dependencies
+python-dotenv
+pydantic>=2.0
+fastapi
+uvicorn[standard]
+httpx
+
+# A2A Protocol
+a2a-sdk[http-server]>=0.3.20
+
+# LLM providers
+openai>=1.0.0
+
+# Configuration
+pyyaml
+toml
+
+# CLI formatting (lightweight)
+rich

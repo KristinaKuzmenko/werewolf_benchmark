@@ -1,0 +1,31 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
+# Use requirements-core.txt to avoid installing UI/dev dependencies
+COPY requirements-core.txt .
+RUN pip install --no-cache-dir -r requirements-core.txt
+
+# Copy only purple agent code
+COPY src/purple_agents/ ./src/purple_agents/
+
+# Create __init__.py files
+RUN touch src/__init__.py && \
+    touch src/purple_agents/__init__.py
+
+# Expose purple agent ports (will be overridden per instance)
+EXPOSE 8101
+
+# Environment variables (will be overridden per instance)
+ENV AGENT_ID=player_1
+ENV AGENT_PORT=8101
+
+# Run purple agent
+CMD python -m src.purple_agents.baseline_agent ${AGENT_ID} ${AGENT_PORT}
