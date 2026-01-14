@@ -21,11 +21,11 @@ RUN touch src/__init__.py && \
     touch src/purple_agents/__init__.py
 
 # Expose purple agent ports (will be overridden per instance)
-EXPOSE 8101
+EXPOSE 8100
 
 # Environment variables (will be overridden per instance)
-ENV AGENT_ID=player_1
-ENV AGENT_PORT=8101
+ENV AGENT_ID=baseline-agent
+ENV AGENT_PORT=8100
 
-# Run purple agent
-CMD python -m src.purple_agents.baseline_agent ${AGENT_ID} ${AGENT_PORT}
+# Run purple agent server
+CMD ["python", "-m", "src.purple_agents.llm_agent.server", "--agent-id", "baseline-agent", "--host", "0.0.0.0", "--port", "8100"]

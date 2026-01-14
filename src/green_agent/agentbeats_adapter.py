@@ -381,9 +381,7 @@ class AgentBeatsAdapter:
         # collected and their connections will be closed by the OS.
         # This is safe because we're shutting down the entire game session.
         
-        logger.warning(f"🧹 cleanup() called - clearing {len(self.ncp_handlers)} handlers")
-        import traceback
-        logger.warning("".join(traceback.format_stack()))
+        logger.info(f"🧹 Cleaning up {len(self.ncp_handlers)} NCP handlers")
         
         for player_id, handler in self.ncp_handlers.items():
             # Reset baseline agents (synchronous cleanup)

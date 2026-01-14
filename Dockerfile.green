@@ -32,11 +32,11 @@ RUN touch src/__init__.py && \
     touch src/green_agent/__init__.py
 
 # Expose green agent port
-EXPOSE 8000
+EXPOSE 9009
 
 # Set environment defaults
 ENV GREEN_AGENT_HOST=0.0.0.0
-ENV GREEN_AGENT_PORT=8000
+ENV GREEN_AGENT_PORT=9009
 ENV LOG_LEVEL=INFO
 
 # Create results directory
@@ -44,8 +44,8 @@ RUN mkdir -p /app/results
 
 # Health check (use standard A2A endpoint)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8000/.well-known/agent-card.json')" || exit 1
+    CMD python -c "import httpx; httpx.get('http://localhost:9009/.well-known/agent-card.json')" || exit 1
 
 # Default: Run green agent (A2A server)
 # Can be overridden with docker-compose command
-CMD ["python", "-m", "src.green_agent.server", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "src.green_agent.server", "--host", "0.0.0.0", "--port", "9009"]

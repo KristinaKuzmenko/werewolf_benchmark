@@ -40,7 +40,7 @@ class EvalRequest(BaseModel):
     1. Multi-agent tournament: participants dict with multiple agents
     2. AgentBeats single-eval: participant (singular) with one agent + NCP bots
     """
-    participants: dict[str, HttpUrl] | None = None  # Multi-agent tournament mode
+    participants: dict[str, HttpUrl] | dict[str, dict[str, Any]] | None = None  # Multi-agent tournament mode (can include agentbeats_id)
     participant: HttpUrl | None = None  # AgentBeats single-eval mode
     config: dict[str, Any]  # Game configuration
     tested_player_id: int | None = None  # Optional: specify player slot for tested agent
@@ -97,12 +97,18 @@ class WerewolfAgent:
         
         # Check mode: tournament vs AgentBeats
         if request.participants is not None:
-            # Tournament mode: multiple agents
-            if len(request.participants) != num_players:
-                return False, f"Expected {num_players} players, got {len(request.participants)}"
+            # Check if this is AgentBeats mode (1 participant) or tournament mode (all participants)
+            if len(request.participants) == 1:
+                # AgentBeats mode: 1 agent + NPC bots
+                logger.info(f"🎯 AgentBeats mode: 1 tested agent + {num_players - 1} NPC bots")
+            elif len(request.participants) == num_players:
+                # Tournament mode: all agents provided
+                logger.info(f"🏆 Tournament mode: {num_players} agents")
+            else:
+                return False, f"Expected {num_players} players or 1 (AgentBeats mode), got {len(request.participants)}"
         elif request.participant is not None:
-            # AgentBeats mode: single agent + NCP bots
-            logger.info(f"🎯 AgentBeats mode: 1 tested agent + {num_players - 1} NCP bots")
+            # AgentBeats mode: single agent + NCP bots (alternative format)
+            logger.info(f"🎯 AgentBeats mode: 1 tested agent + {num_players - 1} NPC bots")
         else:
             return False, "Must provide either 'participants' (tournament) or 'participant' (AgentBeats)"
         
@@ -140,16 +146,40 @@ class WerewolfAgent:
         
         logger.info(f"📋 Evaluation config: {num_games} games, {num_players} players")
         
-        # Determine mode
-        is_agentbeats = request.participant is not None
+        # Determine mode: AgentBeats if single participant (or participant field), Tournament if all participants
+        is_agentbeats = (
+            request.participant is not None or 
+            (request.participants is not None and len(request.participants) == 1)
+        )
         
         # Store request info for creating adapters per game
-        participant_url = request.participant if is_agentbeats else None
+        # For AgentBeats mode with participants (list with 1 element), extract the URL and agentbeats_id
+        participant_url = None
+        participant_agentbeats_id = None
+        participant_name = "baseline-agent"  # Default name
+        
+        if request.participant is not None:
+            participant_url = request.participant
+        elif request.participants is not None and len(request.participants) == 1:
+            # Get the first (and only) participant - can be URL or dict with endpoint/agentbeats_id
+            participant_name = list(request.participants.keys())[0]  # Get the name/key
+            participant_data = list(request.participants.values())[0]
+            if isinstance(participant_data, dict):
+                participant_url = participant_data.get("endpoint")
+                participant_agentbeats_id = participant_data.get("agentbeats_id")
+            else:
+                participant_url = participant_data
+                
         tested_player_id_config = request.tested_player_id
         
         if is_agentbeats:
             logger.info(f"🤖 AgentBeats mode enabled")
             logger.info(f"   1 tested agent + {num_players - 1} NCP bots")
+            logger.info(f"   Participant name: {participant_name}")
+            if participant_agentbeats_id:
+                logger.info(f"   AgentBeats ID: {participant_agentbeats_id}")
+            else:
+                logger.warning(f"   ⚠️ No AgentBeats ID found!")
         else:
             logger.info(f"🏆 Tournament mode enabled")
             logger.info(f"   {len(request.participants)} competing agents")
@@ -243,10 +273,15 @@ class WerewolfAgent:
                 if task_id in self.game_results:
                     game_result = self.game_results[task_id].copy()
                     game_result["game_number"] = game_num
+                    
+                    # Verify tested_agent was added
+                    if is_agentbeats and "tested_agent" not in game_result:
+                        logger.error(f"❌ Game {game_num} (task {task_id}) missing tested_agent field!")
+                    
                     all_game_results.append(game_result)
                     logger.info(f"✓ Game {game_num} completed")
                 
-                # Cleanup this game
+                # Cleanup this game (do NOT delete game_results yet - needed for aggregation)
                 if task_id in self.agentbeats_adapter:
                     self.agentbeats_adapter[task_id].cleanup()
                     del self.agentbeats_adapter[task_id]
@@ -276,10 +311,22 @@ class WerewolfAgent:
         logger.info(f"📊 AGGREGATING RESULTS FROM {len(all_game_results)} GAMES")
         logger.info(f"{'='*80}")
         
+        # Debug: Check structure of all_game_results
+        if all_game_results:
+            first_result = all_game_results[0]
+            logger.info(f"DEBUG: First game result keys: {list(first_result.keys())}")
+            if "results" in first_result:
+                logger.warning("⚠️ game_result already contains 'results' - possible double aggregation!")
+        
         try:
-            aggregated_results = self._aggregate_game_results(all_game_results, is_agentbeats)
+            aggregated_results = self._aggregate_game_results(
+                all_game_results, 
+                is_agentbeats, 
+                participant_agentbeats_id=participant_agentbeats_id,
+                participant_name=participant_name
+            )
             
-            # AgentBeats aggregation already returns only tested agent data
+            # AgentBeats aggregation returns dict with participants and results
             if is_agentbeats:
                 logger.info("✂️ Results filtered for tested agent only")
             
@@ -1160,7 +1207,7 @@ class WerewolfAgent:
                     "reasoning": response.get("reasoning")
                 }
                 
-                logger.info(f"🗳️ Player {player_id} votes for Player {response['vote']} (confidence: {confidence:.0%})")
+                logger.info(f"🗳️ Player {player_id} votes for Player {response['vote']}")
 
                 # Log vote event
                 game_state.game_history.append({
@@ -1376,6 +1423,7 @@ class WerewolfAgent:
         tested_player_id = None
         if task_id in self.agentbeats_adapter:
             tested_player_id = self.agentbeats_adapter[task_id].tested_player_id
+            logger.info(f"🎯 Task {task_id}: Tested player ID = {tested_player_id}")
         
         # Store final results
         game_result_data = {
@@ -1426,19 +1474,25 @@ class WerewolfAgent:
                 "survived": tested_player.is_alive,
                 "won_game": tested_won
             }
+            logger.info(f"✅ Added tested_agent info for task {task_id}, player {tested_player_id}")
+        elif tested_player_id:
+            logger.warning(f"⚠️ Task {task_id}: tested_player_id={tested_player_id} not found in game_state.players (keys: {list(game_state.players.keys())})")
+        else:
+            logger.warning(f"⚠️ Task {task_id}: No tested_player_id found (adapter exists: {task_id in self.agentbeats_adapter})")
         
         self.game_results[task_id] = game_result_data
         
         self.task_status[task_id] = "complete"
         logger.info(f"Game {task_id} finalized. Winner: {game_state.winner.value}")
     
-    def _aggregate_game_results(self, all_game_results: List[Dict[str, Any]], is_agentbeats: bool) -> Dict[str, Any]:
+    def _aggregate_game_results(self, all_game_results: List[Dict[str, Any]], is_agentbeats: bool, participant_agentbeats_id: str = None, participant_name: str = None) -> Dict[str, Any]:
         """
         Aggregate results from multiple games.
         
         Args:
             all_game_results: List of individual game results
             is_agentbeats: If True, aggregate only tested agent metrics
+            participant_agentbeats_id: AgentBeats ID of the tested participant
             
         Returns:
             Aggregated results across all games
@@ -1449,16 +1503,25 @@ class WerewolfAgent:
         
         if is_agentbeats:
             # AgentBeats mode: aggregate tested agent metrics only
-            return self._aggregate_agentbeats_results(all_game_results)
+            return self._aggregate_agentbeats_results(all_game_results, participant_agentbeats_id, participant_name)
         else:
             # Tournament mode: aggregate all players
             return self._aggregate_tournament_results(all_game_results)
     
-    def _aggregate_agentbeats_results(self, all_game_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _aggregate_agentbeats_results(self, all_game_results: List[Dict[str, Any]], participant_agentbeats_id: str = None, participant_name: str = None) -> Dict[str, Any]:
         """Aggregate results for AgentBeats mode (single tested agent)."""
         from collections import Counter
         
         num_games = len(all_game_results)
+        logger.info(f"🔄 Aggregating {num_games} game results")
+        
+        # Debug: Check what we received
+        if all_game_results:
+            first_keys = list(all_game_results[0].keys())
+            logger.info(f"📋 First game result keys: {first_keys}")
+            if "results" in first_keys:
+                logger.error("❌ ERROR: Received already-aggregated results! Expected individual game results.")
+                return all_game_results[0]  # Return as-is if already aggregated
         
         # Find tested agent across games (should be consistent player_id or marked)
         tested_metrics = []
@@ -1501,71 +1564,98 @@ class WerewolfAgent:
         # Count roles
         role_counts = Counter(roles_played)
         
-        aggregated = {
-            "status": "complete",
-            "num_games": num_games,
-            "games_completed": len(tested_metrics),
-            "performance_metrics": {
-                "irs": avg_metric("irs"),
-                "vrs": avg_metric("vrs"),
-                "mss": avg_metric("mss"),
-                "sr": games_survived / num_games,
-                "win_rate": games_won / num_games,
-                "persuasion_score": avg_metric("persuasion_score"),
-                "deception_score": avg_metric("deception_score"),
-                "games_survived": games_survived,
-                "games_won": games_won,
-                "total_games": num_games
-            },
-            "roles_played": dict(role_counts),
-            "individual_games": []
-        }
-        
-        # Add individual game summaries
+        # Build results in AgentBeats format
+        results = []
         for i, game_result in enumerate(all_game_results, 1):
             if "tested_agent" in game_result:
                 tested = game_result["tested_agent"]
-                aggregated["individual_games"].append({
+                player_id = tested.get("player_id")
+                
+                # Get metrics for this game
+                player_metrics = {}
+                role_metrics = {}
+                advanced_metrics = {}
+                if player_id and "players" in game_result:
+                    player_data = game_result["players"].get(str(player_id), {})
+                    player_metrics = player_data.get("metrics", {})
+                    
+                    # Get role-specific metrics
+                    if "role_metrics" in game_result:
+                        role_metrics = game_result["role_metrics"].get(str(player_id), {})
+                    
+                    # Get advanced metrics
+                    if "advanced_metrics" in game_result:
+                        advanced_metrics = game_result["advanced_metrics"]
+                
+                game_result_entry = {
                     "game_number": game_result.get("game_number", i),
                     "role": tested.get("role"),
                     "survived": tested.get("survived", False),
                     "won": tested.get("won_game", False),
                     "rounds": game_result.get("rounds", 0),
-                    "winner": game_result.get("winner")
-                })
+                    "winner": game_result.get("winner"),
+                    "metrics": {
+                        # Core metrics
+                        "irs": player_metrics.get("irs"),
+                        "vrs": player_metrics.get("vrs"),
+                        "mss": player_metrics.get("mss"),
+                        "persuasion_score": player_metrics.get("persuasion_score"),
+                        "deception_score": player_metrics.get("deception_score"),
+                        
+                        # Role-specific metrics
+                        "seer_check_accuracy": role_metrics.get("seer_check_accuracy"),
+                        "witch_heal_effectiveness": role_metrics.get("witch_heal_effectiveness"),
+                        "witch_poison_effectiveness": role_metrics.get("witch_poison_effectiveness"),
+                        "hunter_shot_accuracy": role_metrics.get("hunter_shot_accuracy"),
+                        "guard_protection_success": role_metrics.get("guard_protection_success"),
+                        
+                        # Advanced social metrics (if available)
+                        "manipulation_success_d1": advanced_metrics.get("manipulation_success_d1"),
+                        "manipulation_success_d2": advanced_metrics.get("manipulation_success_d2"),
+                        "auto_sabotage": advanced_metrics.get("auto_sabotage")
+                    }
+                }
+                results.append(game_result_entry)
         
-        # Aggregate role-specific metrics if available
-        role_metrics_agg = {}
-        for game_result in all_game_results:
-            if "role_metrics" in game_result:
-                role_m = game_result["role_metrics"]
-                for key, value in role_m.items():
-                    if isinstance(value, (int, float)):
-                        if key not in role_metrics_agg:
-                            role_metrics_agg[key] = []
-                        role_metrics_agg[key].append(value)
+        # Calculate aggregate statistics across all games
+        def avg_metric(metric_name):
+            values = [
+                g.get("metrics", {}).get(metric_name) 
+                for g in results 
+                if g.get("metrics", {}).get(metric_name) is not None
+            ]
+            return sum(values) / len(values) if values else None
         
-        aggregated["role_metrics"] = {
-            key: sum(values) / len(values) if values else 0.0
-            for key, values in role_metrics_agg.items()
+        # Return single aggregated result for all games
+        # Client will wrap this in results array
+        return {
+            "num_games": num_games,
+            "games_completed": len(tested_metrics),
+            "win_rate": games_won / num_games,
+            "survival_rate": games_survived / num_games,
+            
+            # Average core metrics
+            "average_irs": avg_metric("irs"),
+            "average_vrs": avg_metric("vrs"),
+            "average_mss": avg_metric("mss"),
+            "average_persuasion": avg_metric("persuasion_score"),
+            "average_deception": avg_metric("deception_score"),
+            
+            # Average role-specific metrics
+            "average_seer_check_accuracy": avg_metric("seer_check_accuracy"),
+            "average_witch_heal_effectiveness": avg_metric("witch_heal_effectiveness"),
+            "average_witch_poison_effectiveness": avg_metric("witch_poison_effectiveness"),
+            "average_hunter_shot_accuracy": avg_metric("hunter_shot_accuracy"),
+            "average_guard_protection_success": avg_metric("guard_protection_success"),
+            
+            # Average advanced social metrics
+            "average_manipulation_success_d1": avg_metric("manipulation_success_d1"),
+            "average_manipulation_success_d2": avg_metric("manipulation_success_d2"),
+            "average_auto_sabotage": avg_metric("auto_sabotage"),
+            
+            "roles_played": dict(role_counts),
+            "games": results  # Individual game details
         }
-        
-        # Aggregate advanced metrics
-        advanced_agg = {}
-        for game_result in all_game_results:
-            if "advanced_metrics" in game_result:
-                for key, value in game_result["advanced_metrics"].items():
-                    if isinstance(value, (int, float)):
-                        if key not in advanced_agg:
-                            advanced_agg[key] = []
-                        advanced_agg[key].append(value)
-        
-        aggregated["advanced_metrics"] = {
-            key: sum(values) / len(values) if values else 0.0
-            for key, values in advanced_agg.items()
-        }
-        
-        return aggregated
     
     def _aggregate_tournament_results(self, all_game_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Aggregate results for tournament mode (all players)."""
