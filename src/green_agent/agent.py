@@ -44,6 +44,7 @@ class EvalRequest(BaseModel):
     participant: HttpUrl | None = None  # AgentBeats single-eval mode
     config: dict[str, Any]  # Game configuration
     tested_player_id: int | None = None  # Optional: specify player slot for tested agent
+    agentbeats_id: str | None = None  # AgentBeats platform ID (top-level or in participants)
 
 
 class WerewolfAgent:
@@ -127,6 +128,7 @@ class WerewolfAgent:
         # Parse and validate request
         try:
             request: EvalRequest = EvalRequest.model_validate_json(input_text)
+            
             ok, msg = self.validate_request(request)
             if not ok:
                 await updater.reject(new_agent_text_message(msg))
@@ -158,6 +160,11 @@ class WerewolfAgent:
         participant_agentbeats_id = None
         participant_name = "baseline-agent"  # Default name
         
+        # Try to get agentbeats_id from multiple locations
+        if request.agentbeats_id:
+            # Top-level agentbeats_id (preferred)
+            participant_agentbeats_id = request.agentbeats_id
+        
         if request.participant is not None:
             participant_url = request.participant
         elif request.participants is not None and len(request.participants) == 1:
@@ -166,7 +173,9 @@ class WerewolfAgent:
             participant_data = list(request.participants.values())[0]
             if isinstance(participant_data, dict):
                 participant_url = participant_data.get("endpoint")
-                participant_agentbeats_id = participant_data.get("agentbeats_id")
+                # Override with nested agentbeats_id if present
+                if not participant_agentbeats_id and participant_data.get("agentbeats_id"):
+                    participant_agentbeats_id = participant_data.get("agentbeats_id")
             else:
                 participant_url = participant_data
                 
@@ -176,10 +185,6 @@ class WerewolfAgent:
             logger.info(f"🤖 AgentBeats mode enabled")
             logger.info(f"   1 tested agent + {num_players - 1} NCP bots")
             logger.info(f"   Participant name: {participant_name}")
-            if participant_agentbeats_id:
-                logger.info(f"   AgentBeats ID: {participant_agentbeats_id}")
-            else:
-                logger.warning(f"   ⚠️ No AgentBeats ID found!")
         else:
             logger.info(f"🏆 Tournament mode enabled")
             logger.info(f"   {len(request.participants)} competing agents")
@@ -260,6 +265,11 @@ class WerewolfAgent:
                 logger.info(f"  Players: {num_players}")
                 logger.info(f"  Sheriff: {enable_sheriff}")
                 logger.info(f"  Mode: {'AgentBeats' if adapter else 'Tournament'}")
+                
+                # Log tested agent role in AgentBeats mode
+                if adapter:
+                    tested_role = game_state.players[adapter.tested_player_id].role
+                    logger.info(f"  🎭 Tested agent (Player {adapter.tested_player_id}) role: {tested_role.value}")
                 
             except Exception as e:
                 logger.error(f"Failed to initialize game {game_num}: {e}")

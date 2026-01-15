@@ -3,6 +3,7 @@ Game engine for Werewolf - handles game flow, rules, and state management.
 """
 import uuid
 import random
+import time
 from typing import Dict, List, Optional, Tuple
 from .models import (
     GameState, PlayerInfo, Action, ActionType, Phase, Camp,
@@ -81,12 +82,21 @@ class WerewolfGameEngine:
         """
         game_id = str(uuid.uuid4())
         
+        # Ensure good randomness by re-seeding with high-resolution time + game_id
+        # This prevents correlation issues in rapid game creation (e.g., Docker)
+        seed = int(time.time() * 1000000) + hash(game_id)
+        random.seed(seed)
+        
         # Assign roles randomly
+        # Create list with randomized order (not dict iteration order)
+        role_items = list(self.role_distribution.items())
+        random.shuffle(role_items)  # Randomize which roles go first
+        
         roles = []
-        for role_type, count in self.role_distribution.items():
+        for role_type, count in role_items:
             roles.extend([role_type] * count)
         
-        random.shuffle(roles)
+        random.shuffle(roles)  # Shuffle again for good measure
         
         # Create player info
         players = {}
