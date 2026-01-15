@@ -1,0 +1,54 @@
+version: "3.8"
+
+# AgentBeats One-Shot Mode - for testing production behavior
+# Runs evaluation once and exits (same as platform)
+
+services:
+  # Purple Agent (Tested Agent)
+  purple_agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.purple
+    container_name: agentbeats_purple_agent
+    env_file:
+      - .env
+    ports:
+      - "8100:8100"
+    networks:
+      - agentbeats_network
+    command: python -m src.purple_agents.llm_agent.server --host 0.0.0.0 --port 8100 --public-url http://purple_agent:8100
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8100/health')" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # Green Agent (Evaluator) - A2A Server for integration tests
+  green_agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.green
+    container_name: agentbeats_green_agent
+    env_file:
+      - .env
+    ports:
+      - "9009:9009"
+    volumes:
+      - ./results:/app/results
+    depends_on:
+      purple_agent:
+        condition: service_healthy
+    networks:
+      - agentbeats_network
+    command: python -m src.green_agent.server --host 0.0.0.0 --port 9009
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import httpx; httpx.get('http://localhost:9009/.well-known/agent-card.json')" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+networks:
+  agentbeats_network:
+    driver: bridge
