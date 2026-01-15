@@ -24,7 +24,7 @@ COPY run_agentbeats_docker.py ./
 # - Game rules and mechanics, evaluation metrics (AGENTBEATS_README.md)
 # - How to create their purple agent (PURPLE_AGENT_GUIDE.md)
 RUN mkdir -p /app/docs
-COPY AGENTBEATS_README.md /app/README.md
+COPY README.md /app/README.md
 COPY PURPLE_AGENT_GUIDE.md /app/docs/PURPLE_AGENT_GUIDE.md
 
 # Create __init__.py files for proper module structure

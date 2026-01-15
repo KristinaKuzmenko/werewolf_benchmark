@@ -17,7 +17,7 @@ from a2a.types import (
 from .executor import BaselineExecutor
 
 
-def create_app(agent_id: str, host: str, port: int):
+def create_app(agent_id: str, host: str, port: int, public_url: str = None):
     """
     Create A2A Starlette application.
     
@@ -25,6 +25,7 @@ def create_app(agent_id: str, host: str, port: int):
         agent_id: Unique identifier for this agent
         host: Host to bind the server
         port: Port to bind the server
+        public_url: Public URL for the agent card (optional, defaults to http://host:port)
         
     Returns:
         Starlette application instance
@@ -36,11 +37,12 @@ def create_app(agent_id: str, host: str, port: int):
         tags=["gaming", "social-deduction", "baseline"],
     )
     
+    card_url = public_url or f"http://{host}:{port}"
     card = AgentCard(
         name=agent_id,
         version="1.0.0",
         description="Rule-based baseline agent for Werewolf game",
-        url=f"http://{host}:{port}",
+        url=card_url,
         protocol_version="0.3.0",
         skills=[skill],
         capabilities=AgentCapabilities(streaming=False),
@@ -69,12 +71,14 @@ def main():
     parser.add_argument("--agent-id", type=str, default="baseline-agent", help="Agent ID")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind")
     parser.add_argument("--port", type=int, default=8100, help="Port to bind")
+    parser.add_argument("--public-url", type=str, default=None, help="Public URL for agent card")
     args = parser.parse_args()
     
-    app = create_app(args.agent_id, args.host, args.port)
+    app = create_app(args.agent_id, args.host, args.port, args.public_url)
     
+    card_url = args.public_url or f"http://{args.host}:{args.port}"
     print(f"🎮 Starting Baseline Agent '{args.agent_id}' on {args.host}:{args.port}")
-    print(f"📋 Agent Card: http://{args.host}:{args.port}/.well-known/agent-card.json")
+    print(f"📋 Agent Card: {card_url}/.well-known/agent-card.json")
     print(f"🔧 Protocol Version: 0.3.0")
     print("Ready to play Werewolf!")
     
